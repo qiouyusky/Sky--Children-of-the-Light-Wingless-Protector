@@ -9,7 +9,7 @@ partial class Form1
 
     private void InitializeComponent()
     {
-        this.Text = "光之翼检测器";
+        this.Text = "Wing Detector";
         this.Size = new Size(520, 360);
         this.MinimumSize = new Size(420, 280);
         this.StartPosition = FormStartPosition.CenterScreen;
