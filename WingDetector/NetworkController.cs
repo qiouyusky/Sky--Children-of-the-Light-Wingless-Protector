@@ -21,7 +21,8 @@ public class NetworkController
 
         foreach (var name in _cachedAdapters)
         {
-            var (success, output) = RunNetsh($"interface set interface name=\"{name}\" admin=disable");
+            var (success, output) = RunPowerShell(
+                $"Disable-NetAdapter -Name '{name}' -Confirm:$false");
             if (success)
                 OnLog?.Invoke($"[网络] ✓ 已禁用 \"{name}\"");
             else
@@ -31,13 +32,9 @@ public class NetworkController
 
     public void EnableAllAdapters()
     {
-        var adapters = _cachedAdapters.Count > 0 ? _cachedAdapters : GetActiveAdapters();
-
-        if (adapters.Count == 0)
-        {
-            adapters = GetAllPhysicalAdapters();
-            OnLog?.Invoke($"[网络] 缓存为空，使用物理网卡列表：{string.Join(" | ", adapters)}");
-        }
+        // 恢复时不能只查 Up 的网卡（它们现在是 Down）
+        // 优先用缓存，缓存空则列出所有物理网卡
+        var adapters = _cachedAdapters.Count > 0 ? _cachedAdapters : GetAllPhysicalAdapters();
 
         if (adapters.Count == 0)
         {
@@ -45,29 +42,63 @@ public class NetworkController
             return;
         }
 
+        OnLog?.Invoke($"[网络] 尝试恢复：{string.Join(" | ", adapters)}");
+
         foreach (var name in adapters)
         {
-            var (success, output) = RunNetsh($"interface set interface name=\"{name}\" admin=enable");
+            var (success, output) = RunPowerShell(
+                $"Enable-NetAdapter -Name '{name}' -Confirm:$false");
             if (success)
                 OnLog?.Invoke($"[网络] ✓ 已启用 \"{name}\"");
             else
                 OnLog?.Invoke($"[网络] ✗ 启用 \"{name}\" 失败：{output.Trim()}");
         }
+
+        // 恢复后清空缓存，下次断网重新获取
+        _cachedAdapters.Clear();
     }
 
     private List<string> GetActiveAdapters()
     {
         var cmd = "Get-NetAdapter -Physical | Where-Object { $_.Status -eq 'Up' } | Select-Object -ExpandProperty Name";
-        return RunPowerShell(cmd);
+        return RunPowerShellLines(cmd);
     }
 
     private List<string> GetAllPhysicalAdapters()
     {
         var cmd = "Get-NetAdapter -Physical | Select-Object -ExpandProperty Name";
-        return RunPowerShell(cmd);
+        return RunPowerShellLines(cmd);
     }
 
-    private List<string> RunPowerShell(string command)
+    /// <summary>
+    /// 执行 PowerShell 命令，返回 (成功, 输出)
+    /// </summary>
+    private (bool Success, string Output) RunPowerShell(string command)
+    {
+        var psi = new ProcessStartInfo("powershell.exe",
+            $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var p = Process.Start(psi);
+        if (p == null) return (false, "无法启动 powershell.exe");
+
+        var stdout = p.StandardOutput.ReadToEnd();
+        var stderr = p.StandardError.ReadToEnd();
+        p.WaitForExit();
+
+        var msg = !string.IsNullOrWhiteSpace(stderr) ? stderr : stdout;
+        return (p.ExitCode == 0, msg);
+    }
+
+    /// <summary>
+    /// 执行 PowerShell 命令并逐行返回结果（用于获取网卡名列表）
+    /// </summary>
+    private List<string> RunPowerShellLines(string command)
     {
         var psi = new ProcessStartInfo("powershell.exe",
             $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"")
@@ -88,33 +119,13 @@ public class NetworkController
         if (!string.IsNullOrWhiteSpace(stderr))
             OnLog?.Invoke($"[网络] PowerShell 警告：{stderr.Trim()}");
 
-        var adapters = new List<string>();
+        var names = new List<string>();
         foreach (var line in stdout.Split('\n'))
         {
             var name = line.Trim().TrimStart('\ufeff');
-            if (!string.IsNullOrEmpty(name) && !adapters.Contains(name))
-                adapters.Add(name);
+            if (!string.IsNullOrEmpty(name) && !names.Contains(name))
+                names.Add(name);
         }
-        return adapters;
-    }
-
-    private (bool Success, string Output) RunNetsh(string args)
-    {
-        var psi = new ProcessStartInfo("netsh", args)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        using var p = Process.Start(psi);
-        if (p == null) return (false, "无法启动 netsh");
-
-        var stdout = p.StandardOutput.ReadToEnd();
-        var stderr = p.StandardError.ReadToEnd();
-        p.WaitForExit();
-
-        var msg = !string.IsNullOrWhiteSpace(stderr) ? stderr : stdout;
-        return (p.ExitCode == 0, msg);
+        return names;
     }
 }
