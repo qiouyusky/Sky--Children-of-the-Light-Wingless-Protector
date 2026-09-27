@@ -1,12 +1,12 @@
 namespace WingDetector;
 
-public partial class MainForm : Form
+public partial class Form1 : Form
 {
     private readonly ScreenOcrService _ocr = new();
     private readonly NetworkController _net = new();
     private readonly TrayManager _tray;
 
-    public MainForm()
+    public Form1()
     {
         InitializeComponent();
         _tray = new TrayManager(this);

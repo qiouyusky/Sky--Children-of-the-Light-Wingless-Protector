@@ -1,6 +1,6 @@
 ﻿namespace WingDetector;
 
-partial class MainForm
+partial class Form1
 {
     private Button btnStart = null!;
     private Button btnStop = null!;

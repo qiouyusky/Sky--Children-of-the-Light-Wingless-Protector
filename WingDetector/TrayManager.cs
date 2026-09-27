@@ -3,9 +3,9 @@ namespace WingDetector;
 public class TrayManager
 {
     private readonly NotifyIcon _notifyIcon;
-    private readonly MainForm _form;
+    private readonly Form1 _form;
 
-    public TrayManager(MainForm form)
+    public TrayManager(Form1 form)
     {
         _form = form;
         _notifyIcon = new NotifyIcon

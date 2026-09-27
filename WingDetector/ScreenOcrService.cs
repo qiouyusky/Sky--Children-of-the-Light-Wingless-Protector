@@ -1,4 +1,5 @@
 using System.Drawing.Imaging;
+using System.Text.RegularExpressions;
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
@@ -23,7 +24,7 @@ public class ScreenOcrService
         _engine = OcrEngine.TryCreateFromLanguage(new Language("zh-CN"));
         if (_engine == null)
         {
-            OnStatusChanged?.Invoke("[错误] 中文 OCR 引擎创建失败，请确认已安装中文语言包");
+            OnStatusChanged?.Invoke("[错误] 中文 OCR 引擎创建失败，请确认已在系统设置中安装中文 OCR 语言包");
             return;
         }
 
@@ -51,7 +52,25 @@ public class ScreenOcrService
             var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
 
             var result = await _engine!.RecognizeAsync(softwareBitmap);
-            if (result.Text.Contains(Keyword))
+            string rawText = result.Text ?? "";
+
+            // ================= 调试日志 =================
+            if (!string.IsNullOrWhiteSpace(rawText))
+            {
+                var preview = rawText.Replace("\n", " ").Replace("\r", " ").Trim();
+                if (preview.Length > 50) preview = preview.Substring(0, 50) + "...";
+                OnStatusChanged?.Invoke($"[OCR 识别到] {preview}");
+            }
+            else
+            {
+                OnStatusChanged?.Invoke("[OCR 识别到] (空白，请检查屏幕分辨率或缩放)");
+            }
+            // ===========================================
+
+            // 去除所有空格和换行后再匹配，防止出现"光 之 翼"
+            var cleanText = Regex.Replace(rawText, @"\s+", "");
+            
+            if (cleanText.Contains(Keyword))
             {
                 Stop();
                 OnKeywordDetected?.Invoke();
@@ -65,7 +84,8 @@ public class ScreenOcrService
 
     private Bitmap CaptureScreen()
     {
-        var bounds = Screen.PrimaryScreen!.Bounds;
+        // 使用 VirtualScreen 确保截取全屏（支持多显示器）
+        var bounds = System.Windows.Forms.SystemInformation.VirtualScreen;
         var bmp = new Bitmap(bounds.Width, bounds.Height);
         using var g = Graphics.FromImage(bmp);
         g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
