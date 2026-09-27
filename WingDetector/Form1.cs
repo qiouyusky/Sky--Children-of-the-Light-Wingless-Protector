@@ -75,6 +75,31 @@ public partial class Form1 : Form
         btnStop.Enabled = protecting;
     }
 
+    /// <summary>
+    /// 处理自定义 Windows 消息：当第二个实例启动时，显示已运行实例的主窗口
+    /// </summary>
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == Program.WM_SHOW_MAIN_WINDOW)
+        {
+            ShowMainWindow();
+        }
+        base.WndProc(ref m);
+    }
+
+    private void ShowMainWindow()
+    {
+        if (InvokeRequired)
+        {
+            Invoke(ShowMainWindow);
+            return;
+        }
+        Show();
+        WindowState = FormWindowState.Normal;
+        Activate();
+        BringToFront();
+    }
+
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         if (e.CloseReason == CloseReason.UserClosing)
