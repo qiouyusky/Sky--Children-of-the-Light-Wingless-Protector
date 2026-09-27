@@ -1,4 +1,5 @@
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Windows.Globalization;
 using Windows.Graphics.Imaging;
@@ -13,9 +14,30 @@ public class ScreenOcrService
     private OcrEngine? _engine;
     private const string Keyword = "光之翼";
     private bool _isRunning;
+    private IntPtr _excludeHandle = IntPtr.Zero;
 
     public event Action? OnKeywordDetected;
     public event Action<string>? OnStatusChanged;
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    public void SetExcludeHandle(IntPtr handle)
+    {
+        _excludeHandle = handle;
+    }
 
     public void Start()
     {
@@ -24,7 +46,7 @@ public class ScreenOcrService
         _engine = OcrEngine.TryCreateFromLanguage(new Language("zh-CN"));
         if (_engine == null)
         {
-            OnStatusChanged?.Invoke("[错误] 中文 OCR 引擎创建失败，请确认已在系统设置中安装中文 OCR 语言包");
+            OnStatusChanged?.Invoke("[错误] 中文 OCR 引擎创建失败，请确认已安装中文 OCR 语言包");
             return;
         }
 
@@ -54,22 +76,14 @@ public class ScreenOcrService
             var result = await _engine!.RecognizeAsync(softwareBitmap);
             string rawText = result.Text ?? "";
 
-            // ================= 调试日志 =================
             if (!string.IsNullOrWhiteSpace(rawText))
             {
                 var preview = rawText.Replace("\n", " ").Replace("\r", " ").Trim();
                 if (preview.Length > 50) preview = preview.Substring(0, 50) + "...";
                 OnStatusChanged?.Invoke($"[OCR 识别到] {preview}");
             }
-            else
-            {
-                OnStatusChanged?.Invoke("[OCR 识别到] (空白，请检查屏幕分辨率或缩放)");
-            }
-            // ===========================================
 
-            // 去除所有空格和换行后再匹配，防止出现"光 之 翼"
             var cleanText = Regex.Replace(rawText, @"\s+", "");
-            
             if (cleanText.Contains(Keyword))
             {
                 Stop();
@@ -84,11 +98,29 @@ public class ScreenOcrService
 
     private Bitmap CaptureScreen()
     {
-        // 使用 VirtualScreen 确保截取全屏（支持多显示器）
-        var bounds = System.Windows.Forms.SystemInformation.VirtualScreen;
+        var bounds = SystemInformation.VirtualScreen;
         var bmp = new Bitmap(bounds.Width, bounds.Height);
-        using var g = Graphics.FromImage(bmp);
-        g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.CopyFromScreen(bounds.Location, Point.Empty, bounds.Size);
+
+            // 把自己窗口区域涂黑，避免 OCR 检测到本程序 UI
+            if (_excludeHandle != IntPtr.Zero && IsWindowVisible(_excludeHandle))
+            {
+                if (GetWindowRect(_excludeHandle, out var rect))
+                {
+                    int x = rect.Left - bounds.Left;
+                    int y = rect.Top - bounds.Top;
+                    int w = rect.Right - rect.Left;
+                    int h = rect.Bottom - rect.Top;
+                    if (w > 0 && h > 0)
+                    {
+                        using var black = new SolidBrush(Color.Black);
+                        g.FillRectangle(black, x, y, w, h);
+                    }
+                }
+            }
+        }
         return bmp;
     }
 }
