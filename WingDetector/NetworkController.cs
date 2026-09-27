@@ -22,7 +22,6 @@ public class NetworkController
 
         foreach (var name in _cachedAdapters)
         {
-            // 用双引号包裹名称，同时对名称内的单引号转义（PowerShell 中用两个单引号转义）
             var safeName = name.Replace("'", "''");
             var cmd = $"Disable-NetAdapter -Name '{safeName}' -Confirm:$false";
             var (success, output) = RunPowerShell(cmd);
@@ -35,6 +34,7 @@ public class NetworkController
 
     public void EnableAllAdapters()
     {
+        // 恢复时的网卡来源：优先缓存；缓存为空则查所有物理网卡
         var adapters = _cachedAdapters.Count > 0 ? _cachedAdapters : GetAllAdaptersIncludingDisabled();
 
         if (adapters.Count == 0)
@@ -48,12 +48,42 @@ public class NetworkController
         foreach (var name in adapters)
         {
             var safeName = name.Replace("'", "''");
-            var cmd = $"Enable-NetAdapter -Name '{safeName}' -Confirm:$false";
-            var (success, output) = RunPowerShell(cmd);
-            if (success)
-                OnLog?.Invoke($"[网络] ✓ 已启用 \"{name}\"");
-            else
+
+            // 如果已经启用，跳过
+            var statusCmd = $"(Get-NetAdapter -Name '{safeName}').Status";
+            var (_, currentStatus) = RunPowerShell(statusCmd);
+            if (currentStatus.Trim().Equals("Up", StringComparison.OrdinalIgnoreCase))
+            {
+                OnLog?.Invoke($"[网络] \"{name}\" 已是启用状态，跳过");
+                continue;
+            }
+
+            // 启用
+            var enableCmd = $"Enable-NetAdapter -Name '{safeName}' -Confirm:$false";
+            var (success, output) = RunPowerShell(enableCmd);
+            if (!success)
+            {
                 OnLog?.Invoke($"[网络] ✗ 启用 \"{name}\" 失败：{output.Trim()}");
+                continue;
+            }
+
+            // 轮询等待状态变成 Up（最多 8 秒）
+            bool becameUp = false;
+            for (int i = 0; i < 16; i++)
+            {
+                Thread.Sleep(500);
+                var (_, s) = RunPowerShell(statusCmd);
+                if (s.Trim().Equals("Up", StringComparison.OrdinalIgnoreCase))
+                {
+                    becameUp = true;
+                    break;
+                }
+            }
+
+            if (becameUp)
+                OnLog?.Invoke($"[网络] ✓ 已启用 \"{name}\"，网卡已就绪");
+            else
+                OnLog?.Invoke($"[网络] ⚠ \"{name}\" 启用命令已执行，但网卡状态未在 8 秒内变为 Up，请稍等片刻再测试");
         }
 
         _cachedAdapters.Clear();
@@ -65,19 +95,12 @@ public class NetworkController
         return RunPowerShellLines(cmd);
     }
 
-    /// <summary>
-    /// 列出所有物理网卡（包括已禁用的），用于恢复网络
-    /// </summary>
     private List<string> GetAllAdaptersIncludingDisabled()
     {
         var cmd = "Get-NetAdapter -Physical | Select-Object -ExpandProperty Name";
         return RunPowerShellLines(cmd);
     }
 
-    /// <summary>
-    /// 执行 PowerShell 命令，返回 (退出码0为true, 输出文本)
-    /// 关键：用 -EncodedCommand 传参，避免中文在命令行解析时乱码
-    /// </summary>
     private (bool Success, string Output) RunPowerShell(string command)
     {
         var encoded = EncodeCommand(command);
@@ -97,13 +120,14 @@ public class NetworkController
         var stderr = p.StandardError.ReadToEnd();
         p.WaitForExit();
 
-        var msg = !string.IsNullOrWhiteSpace(stderr) ? stderr : stdout;
-        return (p.ExitCode == 0, msg);
+        if (p.ExitCode == 0)
+            return (true, stdout);
+
+        var errMsg = CleanError(stderr);
+        if (string.IsNullOrWhiteSpace(errMsg)) errMsg = stdout;
+        return (false, errMsg);
     }
 
-    /// <summary>
-    /// 执行 PowerShell 命令并逐行返回结果
-    /// </summary>
     private List<string> RunPowerShellLines(string command)
     {
         var encoded = EncodeCommand(command);
@@ -123,8 +147,12 @@ public class NetworkController
         var stderr = p.StandardError.ReadToEnd();
         p.WaitForExit();
 
-        if (!string.IsNullOrWhiteSpace(stderr))
-            OnLog?.Invoke($"[网络] PowerShell 警告：{stderr.Trim()}");
+        if (p.ExitCode != 0)
+        {
+            var errMsg = CleanError(stderr);
+            if (!string.IsNullOrWhiteSpace(errMsg))
+                OnLog?.Invoke($"[网络] PowerShell 错误：{errMsg}");
+        }
 
         var names = new List<string>();
         foreach (var line in stdout.Split('\n'))
@@ -136,9 +164,28 @@ public class NetworkController
         return names;
     }
 
-    /// <summary>
-    /// 把命令编码为 PowerShell 的 -EncodedCommand 格式：UTF-16LE + Base64
-    /// </summary>
+    private static string CleanError(string stderr)
+    {
+        if (string.IsNullOrWhiteSpace(stderr)) return "";
+
+        var text = stderr;
+        if (text.StartsWith("#< CLIXML"))
+        {
+            var start = text.IndexOf('\n');
+            if (start >= 0) text = text.Substring(start + 1);
+        }
+
+        var sb = new StringBuilder();
+        bool insideTag = false;
+        foreach (var c in text)
+        {
+            if (c == '<') { insideTag = true; continue; }
+            if (c == '>') { insideTag = false; continue; }
+            if (!insideTag) sb.Append(c);
+        }
+        return sb.ToString().Trim();
+    }
+
     private static string EncodeCommand(string command)
     {
         var bytes = Encoding.Unicode.GetBytes(command);
