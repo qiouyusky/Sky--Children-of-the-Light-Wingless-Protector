@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("WingDetector")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3c5a96a12dbefed70c0be21e12d9240fb8e196b1")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+11343bb7537f3e1e5b37aa6c7584cab074c2f675")]
 [assembly: System.Reflection.AssemblyProductAttribute("WingDetector")]
 [assembly: System.Reflection.AssemblyTitleAttribute("WingDetector")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
