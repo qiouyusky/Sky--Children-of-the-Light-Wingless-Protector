@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace WingDetector;
 
@@ -21,8 +22,10 @@ public class NetworkController
 
         foreach (var name in _cachedAdapters)
         {
-            var (success, output) = RunPowerShell(
-                $"Disable-NetAdapter -Name '{name}' -Confirm:$false");
+            // 用双引号包裹名称，同时对名称内的单引号转义（PowerShell 中用两个单引号转义）
+            var safeName = name.Replace("'", "''");
+            var cmd = $"Disable-NetAdapter -Name '{safeName}' -Confirm:$false";
+            var (success, output) = RunPowerShell(cmd);
             if (success)
                 OnLog?.Invoke($"[网络] ✓ 已禁用 \"{name}\"");
             else
@@ -32,9 +35,7 @@ public class NetworkController
 
     public void EnableAllAdapters()
     {
-        // 恢复时不能只查 Up 的网卡（它们现在是 Down）
-        // 优先用缓存，缓存空则列出所有物理网卡
-        var adapters = _cachedAdapters.Count > 0 ? _cachedAdapters : GetAllPhysicalAdapters();
+        var adapters = _cachedAdapters.Count > 0 ? _cachedAdapters : GetAllAdaptersIncludingDisabled();
 
         if (adapters.Count == 0)
         {
@@ -46,15 +47,15 @@ public class NetworkController
 
         foreach (var name in adapters)
         {
-            var (success, output) = RunPowerShell(
-                $"Enable-NetAdapter -Name '{name}' -Confirm:$false");
+            var safeName = name.Replace("'", "''");
+            var cmd = $"Enable-NetAdapter -Name '{safeName}' -Confirm:$false";
+            var (success, output) = RunPowerShell(cmd);
             if (success)
                 OnLog?.Invoke($"[网络] ✓ 已启用 \"{name}\"");
             else
                 OnLog?.Invoke($"[网络] ✗ 启用 \"{name}\" 失败：{output.Trim()}");
         }
 
-        // 恢复后清空缓存，下次断网重新获取
         _cachedAdapters.Clear();
     }
 
@@ -64,19 +65,24 @@ public class NetworkController
         return RunPowerShellLines(cmd);
     }
 
-    private List<string> GetAllPhysicalAdapters()
+    /// <summary>
+    /// 列出所有物理网卡（包括已禁用的），用于恢复网络
+    /// </summary>
+    private List<string> GetAllAdaptersIncludingDisabled()
     {
         var cmd = "Get-NetAdapter -Physical | Select-Object -ExpandProperty Name";
         return RunPowerShellLines(cmd);
     }
 
     /// <summary>
-    /// 执行 PowerShell 命令，返回 (成功, 输出)
+    /// 执行 PowerShell 命令，返回 (退出码0为true, 输出文本)
+    /// 关键：用 -EncodedCommand 传参，避免中文在命令行解析时乱码
     /// </summary>
     private (bool Success, string Output) RunPowerShell(string command)
     {
+        var encoded = EncodeCommand(command);
         var psi = new ProcessStartInfo("powershell.exe",
-            $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"")
+            $"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -96,12 +102,13 @@ public class NetworkController
     }
 
     /// <summary>
-    /// 执行 PowerShell 命令并逐行返回结果（用于获取网卡名列表）
+    /// 执行 PowerShell 命令并逐行返回结果
     /// </summary>
     private List<string> RunPowerShellLines(string command)
     {
+        var encoded = EncodeCommand(command);
         var psi = new ProcessStartInfo("powershell.exe",
-            $"-NoProfile -ExecutionPolicy Bypass -Command \"{command}\"")
+            $"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -127,5 +134,14 @@ public class NetworkController
                 names.Add(name);
         }
         return names;
+    }
+
+    /// <summary>
+    /// 把命令编码为 PowerShell 的 -EncodedCommand 格式：UTF-16LE + Base64
+    /// </summary>
+    private static string EncodeCommand(string command)
+    {
+        var bytes = Encoding.Unicode.GetBytes(command);
+        return Convert.ToBase64String(bytes);
     }
 }
