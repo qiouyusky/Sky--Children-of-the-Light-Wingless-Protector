@@ -34,7 +34,6 @@ public class NetworkController
 
     public void EnableAllAdapters()
     {
-        // 恢复时的网卡来源：优先缓存；缓存为空则查所有物理网卡
         var adapters = _cachedAdapters.Count > 0 ? _cachedAdapters : GetAllAdaptersIncludingDisabled();
 
         if (adapters.Count == 0)
@@ -49,7 +48,6 @@ public class NetworkController
         {
             var safeName = name.Replace("'", "''");
 
-            // 如果已经启用，跳过
             var statusCmd = $"(Get-NetAdapter -Name '{safeName}').Status";
             var (_, currentStatus) = RunPowerShell(statusCmd);
             if (currentStatus.Trim().Equals("Up", StringComparison.OrdinalIgnoreCase))
@@ -58,7 +56,6 @@ public class NetworkController
                 continue;
             }
 
-            // 启用
             var enableCmd = $"Enable-NetAdapter -Name '{safeName}' -Confirm:$false";
             var (success, output) = RunPowerShell(enableCmd);
             if (!success)
@@ -67,26 +64,82 @@ public class NetworkController
                 continue;
             }
 
-            // 轮询等待状态变成 Up（最多 8 秒）
-            bool becameUp = false;
-            for (int i = 0; i < 16; i++)
-            {
-                Thread.Sleep(500);
-                var (_, s) = RunPowerShell(statusCmd);
-                if (s.Trim().Equals("Up", StringComparison.OrdinalIgnoreCase))
-                {
-                    becameUp = true;
-                    break;
-                }
-            }
-
-            if (becameUp)
-                OnLog?.Invoke($"[网络] ✓ 已启用 \"{name}\"，网卡已就绪");
-            else
-                OnLog?.Invoke($"[网络] ⚠ \"{name}\" 启用命令已执行，但网卡状态未在 8 秒内变为 Up，请稍等片刻再测试");
+            WaitUntilUp(name, statusCmd);
         }
 
         _cachedAdapters.Clear();
+    }
+
+    /// <summary>
+    /// 重启网卡：禁用 → 等 2 秒 → 启用 → 等待就绪
+    /// 用于唤醒卡死的网卡
+    /// </summary>
+    public void RestartAllAdapters()
+    {
+        // 先用活跃网卡列表（如果缓存为空就重新查）
+        var adapters = GetActiveAdapters();
+        if (adapters.Count == 0)
+        {
+            // 网卡现在是 Down 状态，用全量列表兜底
+            adapters = GetAllAdaptersIncludingDisabled();
+        }
+
+        if (adapters.Count == 0)
+        {
+            OnLog?.Invoke("[网络] 未找到可重启的网卡");
+            return;
+        }
+
+        OnLog?.Invoke($"[网络] 重启网卡：{string.Join(" | ", adapters)}");
+
+        // 第一步：禁用
+        foreach (var name in adapters)
+        {
+            var safeName = name.Replace("'", "''");
+            var cmd = $"Disable-NetAdapter -Name '{safeName}' -Confirm:$false";
+            var (success, output) = RunPowerShell(cmd);
+            if (success)
+                OnLog?.Invoke($"[网络] ✓ 已禁用 \"{name}\"");
+            else
+                OnLog?.Invoke($"[网络] ✗ 禁用 \"{name}\" 失败：{output.Trim()}");
+        }
+
+        // 第二步：等待 2 秒
+        OnLog?.Invoke("[网络] 等待 2 秒后重新启用...");
+        Thread.Sleep(2000);
+
+        // 第三步：启用
+        foreach (var name in adapters)
+        {
+            var safeName = name.Replace("'", "''");
+            var cmd = $"Enable-NetAdapter -Name '{safeName}' -Confirm:$false";
+            var (success, output) = RunPowerShell(cmd);
+            if (!success)
+            {
+                OnLog?.Invoke($"[网络] ✗ 启用 \"{name}\" 失败：{output.Trim()}");
+                continue;
+            }
+
+            var statusCmd = $"(Get-NetAdapter -Name '{safeName}').Status";
+            WaitUntilUp(name, statusCmd);
+        }
+
+        _cachedAdapters.Clear();
+    }
+
+    private void WaitUntilUp(string name, string statusCmd)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            Thread.Sleep(500);
+            var (_, s) = RunPowerShell(statusCmd);
+            if (s.Trim().Equals("Up", StringComparison.OrdinalIgnoreCase))
+            {
+                OnLog?.Invoke($"[网络] ✓ \"{name}\" 已就绪");
+                return;
+            }
+        }
+        OnLog?.Invoke($"[网络] ⚠ \"{name}\" 启用命令已执行，但网卡状态未在 8 秒内变为 Up，请稍等片刻再测试");
     }
 
     private List<string> GetActiveAdapters()

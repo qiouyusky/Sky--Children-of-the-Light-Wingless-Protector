@@ -13,7 +13,7 @@ public partial class Form1 : Form
 
         _ocr.OnKeywordDetected += OnKeywordDetected;
         _ocr.OnStatusChanged += AppendLog;
-        _net.OnLog += AppendLog;   // 让网络模块也能打日志
+        _net.OnLog += AppendLog;
 
         AppendLog("[系统] 程序已启动，当前为管理员权限运行");
     }
@@ -21,7 +21,6 @@ public partial class Form1 : Form
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
-        // 把主窗口句柄传给 OCR 服务，截图时排除本窗口，避免自检测
         _ocr.SetExcludeHandle(this.Handle);
         AppendLog("[系统] 已排除本程序窗口，避免自我检测");
     }
@@ -40,16 +39,22 @@ public partial class Form1 : Form
         UpdateButtonState(protecting: false);
     }
 
-    private void BtnRestore_Click(object? sender, EventArgs e)
+    public void BtnRestore_Click(object? sender, EventArgs e)
     {
-        _net.EnableAllAdapters();
-        AppendLog("[网络] 已尝试恢复所有网卡");
+        AppendLog("[网络] 用户点击「打开网络」");
+        Task.Run(() => _net.EnableAllAdapters());
+    }
+
+    public void BtnRestart_Click(object? sender, EventArgs e)
+    {
+        AppendLog("[网络] 用户点击「重启网卡」");
+        Task.Run(() => _net.RestartAllAdapters());
     }
 
     private void OnKeywordDetected()
     {
         AppendLog("[检测] 检测到关键词，正在断网...");
-        _net.DisableAllAdapters();
+        Task.Run(() => _net.DisableAllAdapters());
         UpdateButtonState(protecting: false);
     }
 
